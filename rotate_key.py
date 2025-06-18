@@ -170,3 +170,5 @@ def run():
             "last_rotation": now
         })
         print("✅ Updated encrypted keys in Firestore.", flush=True)
+
+run()
