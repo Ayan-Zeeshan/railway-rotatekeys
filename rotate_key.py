@@ -47,7 +47,7 @@ def run():
         ecc_private_pem, ecc_public_key = generate_ecc_keys()
         from cryptography.hazmat.primitives import serialization
         ecc_private_key = serialization.load_pem_private_key(
-            ecc_private_pem.encode(),
+            ecc_private_pem,
             password=None,
             backend=default_backend()
         )   
