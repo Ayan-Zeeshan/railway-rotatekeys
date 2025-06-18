@@ -3,8 +3,8 @@ def run():
     import datetime
     import traceback
     from dotenv import load_dotenv
-    from password_reset.firebase import db
-    from password_reset.utils.encryption import (
+    from firebase import db
+    from encryption import (
         generate_ecc_keys,
         hybrid_encrypt,
         hybrid_decrypt,
