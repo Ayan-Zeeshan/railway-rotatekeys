@@ -44,7 +44,7 @@ def run():
         print("🆕 First-time setup. Generating keys and encrypting data...", flush=True)
 
         # ecc_private_key, ecc_public_key = generate_ecc_keys()
-        ecc_private_pem, ecc_public_key = generate_ecc_keys()
+        ecc_private_key, ecc_public_key = generate_ecc_keys()
         ecc_private_pem = ecc_private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
