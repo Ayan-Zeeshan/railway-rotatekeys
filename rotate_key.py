@@ -15,7 +15,7 @@ def run():
     from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import serialization
 
-    #print("🚀 Starting key rotation script...", flush=True)
+    print("🚀 Starting key rotation script...", flush=True)
     load_dotenv()
     now = datetime.datetime.utcnow()
 
@@ -32,16 +32,16 @@ def run():
         config_data = config_doc.to_dict() or {}
         encrypted_ecc_key = config_data.get("encrypted_ecc_key")
         last_rotation = config_data.get("last_rotation")
-        #print("📄 Loaded config from Firestore.", flush=True)
+        print("📄 Loaded config from Firestore.", flush=True)
     except Exception as e:
-        #print("🔥 Firestore unavailable. Skipping key rotation.", flush=True)
-        #print(traceback.format_exc(), flush=True)
+        print("🔥 Firestore unavailable. Skipping key rotation.", flush=True)
+        print(traceback.format_exc(), flush=True)
         return
 
     is_first_time = encrypted_ecc_key is None
 
     if is_first_time:
-        #print("🆕 First-time setup. Generating keys and encrypting data...", flush=True)
+        print("🆕 First-time setup. Generating keys and encrypting data...", flush=True)
 
         # ecc_private_key, ecc_public_key = generate_ecc_keys()
         ecc_private_key, ecc_public_key = generate_ecc_keys()
@@ -102,10 +102,10 @@ def run():
             "encrypted_aes_key": encrypted_aes_key,
             "last_rotation": now
         })
-        #print("🔐 Stored encrypted keys in Firestore.", flush=True)
+        print("🔐 Stored encrypted keys in Firestore.", flush=True)
 
     else:
-        #print("🔁 Rotating encryption keys...", flush=True)
+        print("🔁 Rotating encryption keys...", flush=True)
 
         master_private_key_pem_str = master_private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -190,6 +190,6 @@ def run():
             "encrypted_aes_key": new_encrypted_aes_key,
             "last_rotation": now
         })
-        #print("✅ Updated encrypted keys in Firestore.", flush=True)
+        print("✅ Updated encrypted keys in Firestore.", flush=True)
 
 run()
