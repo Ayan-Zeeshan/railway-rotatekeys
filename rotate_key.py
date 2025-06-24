@@ -1,12 +1,25 @@
 
-
-# # run()
-# def run(): 
+# def run():
 #     import os
 #     import datetime
 #     import traceback
 #     from dotenv import load_dotenv
-#     from firebase import db
+#     from firebase import db as firestore_db
+#     import base64
+#     import json
+#     import os
+#     import firebase_admin
+#     from firebase_admin import credentials, db
+
+#     if not firebase_admin._apps:
+#         encoded = os.getenv("FIREBASE_CREDENTIAL")
+#         decoded_json = json.loads(base64.b64decode(encoded).decode('utf-8')) 
+#         cred = credentials.Certificate(decoded_json)
+#         firebase_admin.initialize_app(cred, {
+#             "databaseURL": "https://crisis-survivor-default-rtdb.firebaseio.com"
+#         })
+
+#     database_ref = db.reference(path='/',url="https://crisis-survivor-default-rtdb.firebaseio.com")
 #     from encryption import (
 #         generate_ecc_keys,
 #         hybrid_encrypt,
@@ -22,8 +35,8 @@
 #     load_dotenv()
 #     now = datetime.datetime.now()
 
-#     config_ref = db.collection("config").document("encryption_metadata")
-#     master_private_key_pem = os.getenv("MASTER_ECC_PRIVATE_KEY").encode()
+#     config_ref = firestore_db.collection("config").document("encryption_metadata")
+#     master_private_key_pem = os.getenv("MASTER_ECC_PRIVATE_KEY").replace("\\n", "\n").encode()
 #     master_private_key = serialization.load_pem_private_key(
 #         master_private_key_pem,
 #         password=None,
@@ -34,7 +47,7 @@
 #         config_doc = config_ref.get()
 #         config_data = config_doc.to_dict() or {}
 #         encrypted_ecc_key = config_data.get("encrypted_ecc_key")
-#         last_rotation = config_data.get("last_rotation")
+#         encrypted_aes_key = config_data.get("encrypted_aes_key")
 #         print("📄 Loaded config from Firestore.", flush=True)
 #     except Exception as e:
 #         print("🔥 Firestore unavailable. Skipping key rotation.", flush=True)
@@ -55,20 +68,13 @@
 #         print("🆕 First-time setup. Generating keys and encrypting data...", flush=True)
 
 #         ecc_private_key, ecc_public_key = generate_ecc_keys()
+#         aes_key = generate_aes_key()
 
 #         ecc_private_pem = ecc_private_key.private_bytes(
 #             encoding=serialization.Encoding.PEM,
 #             format=serialization.PrivateFormat.PKCS8,
 #             encryption_algorithm=serialization.NoEncryption()
 #         ).decode()
-
-#         ecc_private_key = serialization.load_pem_private_key(
-#             ecc_private_pem.encode(),
-#             password=None,
-#             backend=default_backend()
-#         )
-
-#         aes_key = generate_aes_key()
 
 #         ecc_public_pem = ecc_public_key.public_bytes(
 #             encoding=serialization.Encoding.PEM,
@@ -83,21 +89,24 @@
 #         ).decode()
 
 #         encrypted_ecc_key = hybrid_encrypt(master_public_pem, {
-#             "ecc_key": ecc_private_key.private_bytes(
-#                 encoding=serialization.Encoding.PEM,
-#                 format=serialization.PrivateFormat.PKCS8,
-#                 encryption_algorithm=serialization.NoEncryption()
-#             ).decode()
+#             "ecc_key": ecc_private_pem
 #         })
 
 #         for collection in collections_to_rotate:
-#             docs = db.collection(collection).stream()
+#             # 🔁 Firestore
+#             docs = firestore_db.collection(collection).stream()
 #             for doc in docs:
 #                 doc_data = doc.to_dict()
-#                 encrypted_fields = {}
-#                 for k, v in doc_data.items():
-#                     encrypted_fields[k] = None if v is None else aes_encrypt(aes_key, v)
+#                 encrypted_fields = {k: None if v is None else aes_encrypt(aes_key, v) for k, v in doc_data.items()}
 #                 doc.reference.set(encrypted_fields)
+
+#             # 🔁 RTDB
+#             rtdb_path = rtdb_root.child(collection)
+#             rtdb_data = rtdb_path.get()
+#             if rtdb_data:
+#                 for key, record in rtdb_data.items():
+#                     encrypted_record = {k: None if v is None else aes_encrypt(aes_key, v) for k, v in record.items()}
+#                     rtdb_path.child(key).set(encrypted_record)
 
 #         config_ref.set({
 #             "encrypted_ecc_key": encrypted_ecc_key,
@@ -116,14 +125,12 @@
 #         ).decode()
 
 #         decrypted_ecc_key_pem = hybrid_decrypt(master_private_key_pem_str, encrypted_ecc_key)["ecc_key"].encode()
-
 #         ecc_private_key = serialization.load_pem_private_key(
 #             decrypted_ecc_key_pem,
 #             password=None,
 #             backend=default_backend()
 #         )
 
-#         encrypted_aes_key = config_data["encrypted_aes_key"]
 #         ecc_private_key_pem_str = ecc_private_key.private_bytes(
 #             encoding=serialization.Encoding.PEM,
 #             format=serialization.PrivateFormat.PKCS8,
@@ -157,41 +164,52 @@
 #         })
 
 #         for collection in collections_to_rotate:
-#             docs = db.collection(collection).stream()
+#             # 🔁 Firestore
+#             docs = firestore_db.collection(collection).stream()
 #             for doc in docs:
 #                 doc_data = doc.to_dict()
 #                 decrypted_fields = {}
-#                 for k, encrypted_val in doc_data.items():
-#                     if encrypted_val is None:
-#                         decrypted_fields[k] = None
-#                     else:
+#                 for k, val in doc_data.items():
+#                     try:
+#                         decrypted_fields[k] = aes_decrypt(old_aes_key, val) if val is not None else None
+#                     except Exception:
+#                         decrypted_fields[k] = val
+#                 re_encrypted = {k: None if v is None else aes_encrypt(new_aes_key, v) for k, v in decrypted_fields.items()}
+#                 doc.reference.set(re_encrypted)
+
+#             # 🔁 RTDB
+#             rtdb_path = rtdb_root.child(collection)
+#             rtdb_data = rtdb_path.get()
+#             if rtdb_data:
+#                 for key, record in rtdb_data.items():
+#                     decrypted_fields = {}
+#                     for k, val in record.items():
 #                         try:
-#                             decrypted_fields[k] = aes_decrypt(old_aes_key, encrypted_val)
+#                             decrypted_fields[k] = aes_decrypt(old_aes_key, val) if val is not None else None
 #                         except Exception:
-#                             decrypted_fields[k] = encrypted_val
-
-#                 re_encrypted_fields = {}
-#                 for k, v in decrypted_fields.items():
-#                     re_encrypted_fields[k] = None if v is None else aes_encrypt(new_aes_key, v)
-
-#                 doc.reference.set(re_encrypted_fields)
+#                             decrypted_fields[k] = val
+#                     re_encrypted = {k: None if v is None else aes_encrypt(new_aes_key, v) for k, v in decrypted_fields.items()}
+#                     rtdb_path.child(key).set(re_encrypted)
 
 #         config_ref.set({
 #             "encrypted_ecc_key": new_encrypted_ecc_key,
 #             "encrypted_aes_key": new_encrypted_aes_key,
 #             "last_rotation": now
 #         })
-#         print("✅ Updated encrypted keys in Firestore.", flush=True)
+#         print("✅ Updated encrypted keys in Firestore & RTDB.", flush=True)
 
-# run()
 # run()
 def run():
     import os
     import datetime
     import traceback
+    import base64
+    import json
     from dotenv import load_dotenv
     from firebase import db as firestore_db
-    from password_reset.firebase_config import database_ref as rtdb_root
+    import firebase_admin
+    from firebase_admin import credentials, db
+
     from encryption import (
         generate_ecc_keys,
         hybrid_encrypt,
@@ -205,6 +223,18 @@ def run():
 
     print("🚀 Starting key rotation script...", flush=True)
     load_dotenv()
+
+    # 🔐 Initialize Firebase Admin SDK for RTDB
+    if not firebase_admin._apps:
+        encoded = os.getenv("FIREBASE_CREDENTIAL")
+        decoded_json = json.loads(base64.b64decode(encoded).decode("utf-8"))
+        cred = credentials.Certificate(decoded_json)
+        firebase_admin.initialize_app(cred, {
+            "databaseURL": "https://crisis-survivor-default-rtdb.firebaseio.com"
+        })
+
+    database_ref = db.reference(path="/")
+
     now = datetime.datetime.now()
 
     config_ref = firestore_db.collection("config").document("encryption_metadata")
@@ -221,7 +251,7 @@ def run():
         encrypted_ecc_key = config_data.get("encrypted_ecc_key")
         encrypted_aes_key = config_data.get("encrypted_aes_key")
         print("📄 Loaded config from Firestore.", flush=True)
-    except Exception as e:
+    except Exception:
         print("🔥 Firestore unavailable. Skipping key rotation.", flush=True)
         print(traceback.format_exc(), flush=True)
         return
@@ -273,7 +303,7 @@ def run():
                 doc.reference.set(encrypted_fields)
 
             # 🔁 RTDB
-            rtdb_path = rtdb_root.child(collection)
+            rtdb_path = database_ref.child(collection)
             rtdb_data = rtdb_path.get()
             if rtdb_data:
                 for key, record in rtdb_data.items():
@@ -350,7 +380,7 @@ def run():
                 doc.reference.set(re_encrypted)
 
             # 🔁 RTDB
-            rtdb_path = rtdb_root.child(collection)
+            rtdb_path = database_ref.child(collection)
             rtdb_data = rtdb_path.get()
             if rtdb_data:
                 for key, record in rtdb_data.items():
