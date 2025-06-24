@@ -220,7 +220,8 @@ def run():
         "users",
         "VictimBasicInfo",
         "DonorBasicInfo",
-        "ConsultantBasicInfo"
+        "ConsultantBasicInfo",
+        "Requests"
     ]
 
     if is_first_time:
