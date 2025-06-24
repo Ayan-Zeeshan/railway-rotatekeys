@@ -1,4 +1,6 @@
 
+
+# # run()
 # def run(): 
 #     import os
 #     import datetime
@@ -18,7 +20,7 @@
 
 #     print("🚀 Starting key rotation script...", flush=True)
 #     load_dotenv()
-#     now = datetime.datetime.utcnow()
+#     now = datetime.datetime.now()
 
 #     config_ref = db.collection("config").document("encryption_metadata")
 #     master_private_key_pem = os.getenv("MASTER_ECC_PRIVATE_KEY").encode()
@@ -40,6 +42,14 @@
 #         return
 
 #     is_first_time = encrypted_ecc_key is None
+
+#     collections_to_rotate = [
+#         "users",
+#         "VictimBasicInfo",
+#         "DonorBasicInfo",
+#         "ConsultantBasicInfo",
+#         "Requests"
+#     ]
 
 #     if is_first_time:
 #         print("🆕 First-time setup. Generating keys and encrypting data...", flush=True)
@@ -80,7 +90,7 @@
 #             ).decode()
 #         })
 
-#         for collection in ["users", "basic_info"]:
+#         for collection in collections_to_rotate:
 #             docs = db.collection(collection).stream()
 #             for doc in docs:
 #                 doc_data = doc.to_dict()
@@ -146,7 +156,7 @@
 #             ).decode()
 #         })
 
-#         for collection in ["users", "basic_info"]:
+#         for collection in collections_to_rotate:
 #             docs = db.collection(collection).stream()
 #             for doc in docs:
 #                 doc_data = doc.to_dict()
@@ -174,12 +184,14 @@
 #         print("✅ Updated encrypted keys in Firestore.", flush=True)
 
 # run()
-def run(): 
+# run()
+def run():
     import os
     import datetime
     import traceback
     from dotenv import load_dotenv
-    from firebase import db
+    from firebase import db as firestore_db
+    from password_reset.firebase_config import database_ref as rtdb_root
     from encryption import (
         generate_ecc_keys,
         hybrid_encrypt,
@@ -193,10 +205,10 @@ def run():
 
     print("🚀 Starting key rotation script...", flush=True)
     load_dotenv()
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now()
 
-    config_ref = db.collection("config").document("encryption_metadata")
-    master_private_key_pem = os.getenv("MASTER_ECC_PRIVATE_KEY").encode()
+    config_ref = firestore_db.collection("config").document("encryption_metadata")
+    master_private_key_pem = os.getenv("MASTER_ECC_PRIVATE_KEY").replace("\\n", "\n").encode()
     master_private_key = serialization.load_pem_private_key(
         master_private_key_pem,
         password=None,
@@ -207,7 +219,7 @@ def run():
         config_doc = config_ref.get()
         config_data = config_doc.to_dict() or {}
         encrypted_ecc_key = config_data.get("encrypted_ecc_key")
-        last_rotation = config_data.get("last_rotation")
+        encrypted_aes_key = config_data.get("encrypted_aes_key")
         print("📄 Loaded config from Firestore.", flush=True)
     except Exception as e:
         print("🔥 Firestore unavailable. Skipping key rotation.", flush=True)
@@ -228,20 +240,13 @@ def run():
         print("🆕 First-time setup. Generating keys and encrypting data...", flush=True)
 
         ecc_private_key, ecc_public_key = generate_ecc_keys()
+        aes_key = generate_aes_key()
 
         ecc_private_pem = ecc_private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption()
         ).decode()
-
-        ecc_private_key = serialization.load_pem_private_key(
-            ecc_private_pem.encode(),
-            password=None,
-            backend=default_backend()
-        )
-
-        aes_key = generate_aes_key()
 
         ecc_public_pem = ecc_public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
@@ -256,21 +261,24 @@ def run():
         ).decode()
 
         encrypted_ecc_key = hybrid_encrypt(master_public_pem, {
-            "ecc_key": ecc_private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption()
-            ).decode()
+            "ecc_key": ecc_private_pem
         })
 
         for collection in collections_to_rotate:
-            docs = db.collection(collection).stream()
+            # 🔁 Firestore
+            docs = firestore_db.collection(collection).stream()
             for doc in docs:
                 doc_data = doc.to_dict()
-                encrypted_fields = {}
-                for k, v in doc_data.items():
-                    encrypted_fields[k] = None if v is None else aes_encrypt(aes_key, v)
+                encrypted_fields = {k: None if v is None else aes_encrypt(aes_key, v) for k, v in doc_data.items()}
                 doc.reference.set(encrypted_fields)
+
+            # 🔁 RTDB
+            rtdb_path = rtdb_root.child(collection)
+            rtdb_data = rtdb_path.get()
+            if rtdb_data:
+                for key, record in rtdb_data.items():
+                    encrypted_record = {k: None if v is None else aes_encrypt(aes_key, v) for k, v in record.items()}
+                    rtdb_path.child(key).set(encrypted_record)
 
         config_ref.set({
             "encrypted_ecc_key": encrypted_ecc_key,
@@ -289,14 +297,12 @@ def run():
         ).decode()
 
         decrypted_ecc_key_pem = hybrid_decrypt(master_private_key_pem_str, encrypted_ecc_key)["ecc_key"].encode()
-
         ecc_private_key = serialization.load_pem_private_key(
             decrypted_ecc_key_pem,
             password=None,
             backend=default_backend()
         )
 
-        encrypted_aes_key = config_data["encrypted_aes_key"]
         ecc_private_key_pem_str = ecc_private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
@@ -330,30 +336,38 @@ def run():
         })
 
         for collection in collections_to_rotate:
-            docs = db.collection(collection).stream()
+            # 🔁 Firestore
+            docs = firestore_db.collection(collection).stream()
             for doc in docs:
                 doc_data = doc.to_dict()
                 decrypted_fields = {}
-                for k, encrypted_val in doc_data.items():
-                    if encrypted_val is None:
-                        decrypted_fields[k] = None
-                    else:
+                for k, val in doc_data.items():
+                    try:
+                        decrypted_fields[k] = aes_decrypt(old_aes_key, val) if val is not None else None
+                    except Exception:
+                        decrypted_fields[k] = val
+                re_encrypted = {k: None if v is None else aes_encrypt(new_aes_key, v) for k, v in decrypted_fields.items()}
+                doc.reference.set(re_encrypted)
+
+            # 🔁 RTDB
+            rtdb_path = rtdb_root.child(collection)
+            rtdb_data = rtdb_path.get()
+            if rtdb_data:
+                for key, record in rtdb_data.items():
+                    decrypted_fields = {}
+                    for k, val in record.items():
                         try:
-                            decrypted_fields[k] = aes_decrypt(old_aes_key, encrypted_val)
+                            decrypted_fields[k] = aes_decrypt(old_aes_key, val) if val is not None else None
                         except Exception:
-                            decrypted_fields[k] = encrypted_val
-
-                re_encrypted_fields = {}
-                for k, v in decrypted_fields.items():
-                    re_encrypted_fields[k] = None if v is None else aes_encrypt(new_aes_key, v)
-
-                doc.reference.set(re_encrypted_fields)
+                            decrypted_fields[k] = val
+                    re_encrypted = {k: None if v is None else aes_encrypt(new_aes_key, v) for k, v in decrypted_fields.items()}
+                    rtdb_path.child(key).set(re_encrypted)
 
         config_ref.set({
             "encrypted_ecc_key": new_encrypted_ecc_key,
             "encrypted_aes_key": new_encrypted_aes_key,
             "last_rotation": now
         })
-        print("✅ Updated encrypted keys in Firestore.", flush=True)
+        print("✅ Updated encrypted keys in Firestore & RTDB.", flush=True)
 
 run()
