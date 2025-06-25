@@ -230,10 +230,10 @@ def run():
         decoded_json = json.loads(base64.b64decode(encoded).decode("utf-8"))
         cred = credentials.Certificate(decoded_json)
         firebase_admin.initialize_app(cred, {
-            "databaseURL": "https://crisis-survivor-default-rtdb.firebaseio.com"
-        })
+        "databaseURL": "https://crisis-survivor-default-rtdb.firebaseio.com"
+    })
 
-    database_ref = db.reference(path="/")
+    database_ref = db.reference(path='/',url="https://crisis-survivor-default-rtdb.firebaseio.com")
 
     now = datetime.datetime.now()
 
