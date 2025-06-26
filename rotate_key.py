@@ -171,7 +171,7 @@ def run():
         firebase_admin.initialize_app(cred, {
             "databaseURL": os.getenv("FIREBASE_RTDB_URL")
         })
-    rtdb = db.reference(path='/', url=os.getenv("FIREBASE_RTDB_URL"))
+    rtdb = db.reference(path='/', url="https://crisis-survivor-default-rtdb.firebaseio.com/")
     fs = firestore.client()
     now = datetime.datetime.now()
 
